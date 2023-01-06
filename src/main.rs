@@ -1,141 +1,17 @@
 #![allow(non_snake_case)]
 
-use serde::de::{Deserializer, Visitor};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct VaultLog {
-    __typename: String,
-    timestamp: String,
-}
-
-#[allow(non_snake_case)]
-#[derive(Debug, Serialize, Deserialize)]
-struct VaultWithLog {
-    cdpId: Option<String>,
-    logs: Vec<VaultLog>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Vault {
-    vaults: Vec<VaultWithLog>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AllVaultsAtBlock {}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(transparent)]
-struct StringOrF64(f64);
-
-impl<'de> Deserialize<'de> for StringOrF64 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct MyVisitor;
-
-        impl<'de> Visitor<'de> for MyVisitor {
-            type Value = StringOrF64;
-
-            fn expecting(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-                fmt.write_str("f64 or string")
-            }
-
-            fn visit_f64<E>(self, val: f64) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(StringOrF64(val as f64))
-            }
-
-            fn visit_u64<E>(self, val: u64) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(StringOrF64(val as f64))
-            }
-
-            fn visit_str<E>(self, val: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match val.parse::<f64>() {
-                    Ok(val) => self.visit_f64(val),
-                    Err(_) => Err(E::custom("failed to parse f64")),
-                }
-            }
-        }
-
-        deserializer.deserialize_any(MyVisitor)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VaultSet {
-    timestamp: String,
-    resultArray: Vec<SubgraphVault>,
-    price: StringOrF64,
-    rate: String,
-    liquidationRatio: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SubgraphVault {
-    id: String,
-    collateral: String,
-    debt: String,
-    cdpId: Option<String>,
-    updatedAt: Option<String>,
-    updatedAtBlock: Option<String>,
-    updatedAtTransaction: Option<String>,
-    safetyLevel: String,
-}
-
-#[derive(Debug, Serialize)]
-struct Data<'a> {
-    firstBlock: String,
-    secondBlock: String,
-    vaultsAtFirstBlock: &'a HashMap<String, VaultSet>,
-    vaultsAtSecondBlock: &'a HashMap<String, VaultSet>,
-}
-
-#[derive(Debug, Serialize)]
-struct VaultTransitionInnerType<'a> {
-    first: &'a SubgraphVault,
-    second: &'a SubgraphVault,
-    liquidated: bool,
-    liquidationTimestamp: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-struct BlockDiffMetadata {
-    firstBlock: String,
-    firstTimestamp: String,
-    firstPrice: String,
-    firstRate: String,
-    firstLiquidationRatio: String,
-
-    secondBlock: String,
-    secondTimestamp: String,
-    secondPrice: String,
-    secondRate: String,
-    secondLiquidationRatio: String,
-}
-
-#[derive(Debug, Serialize)]
-struct VaultTransitionWithMetadata<'a> {
-    meta: BlockDiffMetadata,
-    vaultTransition: HashMap<&'a String, VaultTransitionInnerType<'a>>,
-}
+mod json_structure;
+use json_structure::{
+    BlockDiffMetadata, Data, SubgraphVault, Vault, VaultSet, VaultTransitionInnerType,
+    VaultTransitionWithMetadata,
+};
 
 fn read_vault_history_from_file<P: AsRef<Path>>(
     path: P,
