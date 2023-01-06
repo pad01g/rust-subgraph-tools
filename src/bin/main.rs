@@ -1,5 +1,9 @@
 #![allow(non_snake_case)]
 
+use rust_subgraph_tools::json_structure::{
+    BlockDiffMetadata, Data, SubgraphVault, Vault, VaultSet, VaultTransitionInnerType,
+    VaultTransitionWithMetadata,
+};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
@@ -7,11 +11,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
-mod json_structure;
-use json_structure::{
-    BlockDiffMetadata, Data, SubgraphVault, Vault, VaultSet, VaultTransitionInnerType,
-    VaultTransitionWithMetadata,
-};
 
 fn read_vault_history_from_file<P: AsRef<Path>>(
     path: P,
@@ -48,7 +47,10 @@ pub fn read_dir(
     allVaultsAtBlock: &mut HashMap<String, HashMap<String, VaultSet>>,
 ) -> Result<(), Box<dyn Error>> {
     let dir = fs::read_dir(path)?;
-    for item in dir.into_iter() {
+    // take 10 is for debug
+    for item in dir.into_iter()
+    // .take(10)
+    {
         let item = item?;
         let block_number = item.file_name().into_string();
         let block_number_path = item.path();
@@ -142,6 +144,8 @@ fn main() {
 
         let mut vaultTransitionSet: Vec<VaultTransitionWithMetadata> = vec![];
         let splitFileCount = 100;
+        println!("dataset length: {}", dataset.len());
+        let mut dRatio: f64 = 0.0;
         for index in 0..dataset.len() {
             let row = &dataset[index];
 
@@ -234,21 +238,90 @@ fn main() {
 
             if index % splitFileCount == splitFileCount - 1 {
                 println!(
-                    "`save split content in file: {} ... {}",
-                    index - (splitFileCount - 1),
-                    index
-                );
-                let file_name = format!(
-                    "../subgraph-tools/data/result/result-{}-{}.json",
+                    "analyzing split content: {} ... {}",
                     index - (splitFileCount - 1),
                     index
                 );
 
-                let json_str = serde_json::to_string(&vaultTransitionSet).unwrap();
-                fs::write(file_name, json_str).expect("Unable to write file");
+                // calculate data from vaultTransitionSet
+                for i in 0..vaultTransitionSet.len() {
+                    let vaultTransition = &vaultTransitionSet[i];
+                    let secondPrice = vaultTransition.meta.secondPrice.parse::<f64>();
+                    let firstPrice = vaultTransition.meta.firstPrice.parse::<f64>();
+                    match (firstPrice, secondPrice) {
+                        (Ok(firstPrice), Ok(secondPrice)) => {
+                            let price_drop_ratio = secondPrice / firstPrice;
+                            if price_drop_ratio < 1.0 {
+                                // calculated capital at risk value
+                                let capitalAtRiskValueRisk = vaultTransition
+                                    .vaultTransition
+                                    .values()
+                                    .into_iter()
+                                    .map(|vaultTransitionInner| {
+                                        let first = vaultTransitionInner.first;
+                                        match (
+                                            first.collateral.parse::<f64>(),
+                                            first.debt.parse::<f64>(),
+                                            vaultTransition
+                                                .meta
+                                                .firstLiquidationRatio
+                                                .parse::<f64>(),
+                                            vaultTransition.meta.firstRate.parse::<f64>(),
+                                        ) {
+                                            (
+                                                Ok(collateral),
+                                                Ok(debt),
+                                                Ok(liquidationRatio),
+                                                Ok(rate),
+                                            ) => {
+                                                if collateral * secondPrice
+                                                    > debt * liquidationRatio * rate
+                                                {
+                                                    return 0.0;
+                                                } else {
+                                                    return debt;
+                                                }
+                                            }
+                                            _ => {
+                                                return 0.0;
+                                            }
+                                        }
+                                    })
+                                    .fold(0.0, |x, y| x + y);
+
+                                // actual capital at risk value
+                                let capitalAtRiskValueLiq = vaultTransition
+                                    .vaultTransition
+                                    .values()
+                                    .into_iter()
+                                    .map(|vaultTransitionInner| {
+                                        let liquidatedAmount = if vaultTransitionInner.liquidated {
+                                            match (&vaultTransitionInner.first.debt).parse::<f64>()
+                                            {
+                                                Ok(debt) => debt,
+                                                _ => 0.0,
+                                            }
+                                        } else {
+                                            0.0
+                                        };
+
+                                        return liquidatedAmount;
+                                    })
+                                    .fold(0.0, |x, y| x + y);
+
+                                dRatio += (capitalAtRiskValueLiq - capitalAtRiskValueRisk).abs()
+                                    / capitalAtRiskValueRisk;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 vaultTransitionSet = vec![];
             }
         }
+        let dRatioMean = dRatio / (dataset.len() as f64) * 100.0;
+        println!("d ratio mean: {}", dRatioMean);
 
         // check if dataSet can be considered valid using liquidationTimestampListByVault
         // vaultTransitionSet array contents can be occasionally saved to file.
@@ -257,9 +330,9 @@ fn main() {
             "{:#?}",
             vaults["0x0000485d124ca18832ebc0e0e3d1947ee4db8427-ETH-A"].vaults[0].cdpId
         );
-        println!(
-            "{:#?}",
-            allVaultsAtBlock["16266198"]["ETH-A"].resultArray[0].cdpId
-        );
+        // println!(
+        //     "{:#?}",
+        //     allVaultsAtBlock["16266198"]["ETH-A"].resultArray[0].cdpId
+        // );
     }
 }

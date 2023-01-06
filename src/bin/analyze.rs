@@ -7,11 +7,12 @@ fn read_dir() -> Result<(), Box<dyn Error>> {
     let dir = fs::read_dir(result_dir)?;
     for item in dir.into_iter() {
         let file_name = item?.path();
+        println!("{}", file_name.to_str().unwrap());
         // read_file(file_name)?;
     }
     Ok(())
 }
 
 fn main() {
-    read_dir();
+    let _ = read_dir();
 }
