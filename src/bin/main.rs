@@ -130,7 +130,7 @@ fn main() {
                 match (first_block, second_block) {
                     (Ok(first_block_num), Ok(second_block_num)) => {
                         if first_block_num < second_block_num
-                            && second_block_num - first_block_num < 40000
+                            && second_block_num - first_block_num < 10000
                         // 40000 blocks = around one week
                         {
                             let vaultsAtSecondBlock = &allVaultsAtBlock[block_key_2];
@@ -155,15 +155,26 @@ fn main() {
         println!("dataset length: {}", dataset.len());
 
         let parameters: Vec<(f64, f64)> = vec![
-            (50.0, 0.5),
+            (300.0, 0.5),
+            (200.0, 0.5),
             (100.0, 0.5),
-            (150.0, 0.5),
-            (50.0, 0.3),
+            (50.0, 0.5),
+            (25.0, 0.5),
+            (300.0, 0.4),
+            (200.0, 0.4),
+            (100.0, 0.4),
+            (50.0, 0.4),
+            (25.0, 0.4),
+            (300.0, 0.3),
+            (200.0, 0.3),
             (100.0, 0.3),
-            (150.0, 0.3),
-            (50.0, 0.1),
-            (100.0, 0.1),
-            (150.0, 0.1),
+            (50.0, 0.3),
+            (25.0, 0.3),
+            (300.0, 0.2),
+            (200.0, 0.2),
+            (100.0, 0.2),
+            (50.0, 0.2),
+            (25.0, 0.2),
         ];
         for (threshold, coefficient) in parameters {
             println!(
@@ -172,7 +183,12 @@ fn main() {
             );
             let start = Instant::now();
             let mut dRatio: f64 = 0.0;
+            let mut dRatioList: Vec<f64> = vec![];
             let mut validDataPointCount: u32 = 0;
+            let mut plusCount: u32 = 0;
+            let mut plusSum: f64 = 0.0;
+            let mut minusCount: u32 = 0;
+            let mut minusSum: f64 = 0.0;
 
             for index in 0..dataset.len() {
                 let row = &dataset[index];
@@ -344,12 +360,23 @@ fn main() {
                                     return liquidatedAmount;
                                 })
                                 .fold(0.0, |x, y| x + y);
+                            
+                            // sum of all debt
+                            let debtSum = vaultTransitionWithMetadata
+                                .vaultTransition
+                                .values()
+                                .into_iter()
+                                .map(|vaultTransitionInner| {
+                                    match (&vaultTransitionInner.first.debt).parse::<f64>() {
+                                        Ok(debt) => debt,
+                                        _ => 0.0,
+                                    }
+                                })
+                                .fold(0.0, |x, y| x + y);
 
                             // only think in case estimated risk is above zero. otherwise, the data point is invalid.
                             if capitalAtRiskValueRisk > 0.0 {
-                                let maybeNan = (capitalAtRiskValueLiq - capitalAtRiskValueRisk)
-                                    .abs()
-                                    / capitalAtRiskValueRisk;
+                                let maybeNan = (capitalAtRiskValueLiq - capitalAtRiskValueRisk)/debtSum;
                                 if maybeNan.is_nan() {
                                     println!(
                                         "nan detected: {}, {}, {}, {}",
@@ -360,8 +387,16 @@ fn main() {
                                         capitalAtRiskValueRisk,
                                     );
                                 } else {
-                                    dRatio += maybeNan;
+                                    dRatio += maybeNan.abs();
+                                    if capitalAtRiskValueLiq > capitalAtRiskValueRisk {
+                                        plusCount += 1;
+                                        plusSum += maybeNan;
+                                    } else {
+                                        minusCount += 1;
+                                        minusSum += maybeNan;
+                                    }
                                     validDataPointCount += 1;
+                                    dRatioList.push(maybeNan.abs());
                                 }
                             }
                         }
@@ -369,10 +404,13 @@ fn main() {
                     _ => {}
                 }
             }
+            // can't use sort, workaround from https://yiskw713.hatenablog.com/entry/2021/06/09/075419
+            dRatioList.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let dRatioMedian = dRatioList[dRatioList.len() / 2];
             let dRatioMean = dRatio / (validDataPointCount as f64) * 100.0;
             println!(
-                "dRatio: {}, validDataPointCount: {}, d ratio mean: {}",
-                dRatio, validDataPointCount, dRatioMean
+                "dRatioMedian: {}, plusSum({}) + minusSum({}) = dRatio({}), plusCount({}) + minusCount({}) = validDataPointCount({}), d ratio mean: {}",
+                dRatioMedian, plusSum, minusSum, dRatio, plusCount, minusCount, validDataPointCount, dRatioMean, 
             );
             println!(
                 "Time elapsed in calculating dRatio is: {:?}",
